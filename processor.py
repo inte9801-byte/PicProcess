@@ -69,7 +69,7 @@ def get_target_folder(file_path, mode='date'):
     return date.strftime('%Y-%m-%d')
 
 def safe_move(src_path, dest_folder, action_table, auto_rotate=False):
-    """安全移動檔案（防覆寫），支援自動轉正"""
+    """安全移動檔案，效能優化版 (優先使用 rename 機制)"""
     filename = os.path.basename(src_path)
     os.makedirs(dest_folder, exist_ok=True)
     
@@ -87,34 +87,32 @@ def safe_move(src_path, dest_folder, action_table, auto_rotate=False):
             try:
                 with Image.open(src_path) as img:
                     exif = img.getexif()
-                    # 274 是 EXIF 中代表 Orientation (方向) 的標籤代碼
                     orientation = exif.get(274)
                     
-                    # 只有在方向標籤存在，且不等於 1 (1 代表原本就是正的) 時才處理
                     if orientation and orientation != 1:
                         img_rotated = ImageOps.exif_transpose(img)
-                        
-                        # 【關鍵修復】刪除原有的方向標籤，避免看圖軟體「二次旋轉」
                         del exif[274]
-                        
-                        # 儲存轉正後的像素，並寫回已經拔除方向標籤的乾淨 EXIF
                         img_rotated.save(dest_path, exif=exif)
                         is_rotated = True
             except Exception:
                 pass 
 
         if not is_rotated:
-            shutil.copy2(src_path, dest_path)
+            # 【優化點】使用 shutil.move 自動判斷最佳搬移方式，瞬間完成
+            shutil.move(src_path, dest_path)
 
         if os.path.exists(dest_path):
-            os.remove(src_path)
+            if is_rotated and os.path.exists(src_path):
+                # 只有被轉正且另存新檔的情況，才需要手動刪除原檔
+                os.remove(src_path)
+                
             action_table.append({
                 'original': src_path,
                 'moved_to': dest_path
             })
             return True, dest_path, 'success'
         else:
-            return False, None, 'copy/save failed'
+            return False, None, 'move/save failed'
             
     except Exception as e:
         return False, None, str(e)
