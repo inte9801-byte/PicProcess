@@ -1,6 +1,5 @@
 name: Build Windows EXE
 
-# 設定觸發條件：當程式碼有更新，或是手動點擊按鈕時執行
 on:
   push:
     branches: [ main ]
@@ -8,7 +7,6 @@ on:
 
 jobs:
   build:
-    # 呼叫微軟的 Windows 雲端伺服器
     runs-on: windows-latest
 
     steps:
@@ -18,17 +16,17 @@ jobs:
     - name: 安裝 Python 環境
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11' # 使用穩定版 Python
+        python-version: '3.11'
 
-    - name: 安裝相依套件與打包工具
+    - name: 強制安裝相依套件與打包工具
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install Pillow send2trash
         pip install pyinstaller
 
-    - name: 執行 PyInstaller 打包
+    - name: 執行 PyInstaller 打包 (加入隱藏套件強制打包)
       run: |
-        pyinstaller --windowed --onedir --name "PicProcess" main.py
+        pyinstaller --windowed --onedir --hidden-import PIL --hidden-import send2trash --name "PicProcess" main.py
 
     - name: 將打包結果上傳供下載
       uses: actions/upload-artifact@v4
