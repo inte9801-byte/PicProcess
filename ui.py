@@ -1,8 +1,10 @@
 # ui.py
 # PicProcess ver 1.0
-# 功能：圖形介面主視窗（極致緊湊網格排版 + 全英文詳細分類戰報）
+# 功能：圖形介面主視窗（執行緒安全 + 跨平台相容 + 滾動視窗優化版）
 
 import os
+import platform      # 【新增】跨平台判斷
+import subprocess    # 【新增】跨平台執行指令
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import threading
@@ -165,24 +167,47 @@ class PicProcessApp:
         tk.Label(self.root, text=f'Undo available for current session only',
                  font=(FONT_SYS, 9), bg=BG_APP, fg='#C7C7CC').pack(pady=(0, 8))
 
+    # ── 【優化】跨平台開啟資料夾 ──
+    def _open_folder_cross_platform(self, path):
+        """根據不同作業系統使用對應的指令打開資料夾"""
+        try:
+            if platform.system() == "Windows":
+                os.startfile(path)
+            elif platform.system() == "Darwin":
+                subprocess.run(["open", path])
+            else:
+                subprocess.run(["xdg-open", path])
+        except Exception as e:
+            self._log(f'> ⚠️  Failed to open folder: {str(e)}', 'error')
+
     def _pick_folder(self):
         folder = filedialog.askdirectory(title='選擇照片來源資料夾')
         if folder:
             self.source_folder.set(folder)
             self._log(f'> Source folder: {folder}')
 
+    # ── 【優化】執行緒安全的 UI 更新 ──
     def _log(self, msg, tag='info'):
+        """將日誌更新排程回主執行緒執行"""
+        self.root.after(0, lambda: self._update_terminal(msg, tag))
+        
+    def _update_terminal(self, msg, tag):
         self.terminal.config(state='normal')
         self.terminal.insert('end', msg + '\n', tag)
         self.terminal.see('end')
         self.terminal.config(state='disabled')
 
     def _log_progress(self, done, total):
+        """將進度條更新排程回主執行緒執行"""
         pct = int(done / total * 100) if total > 0 else 0
         filled = int(pct / 5)
         bar = '█' * filled + '░' * (20 - filled)
-        self._log(f'> [{bar}] {pct}%  {done}/{total}')
-        self.progress_label.config(text=f'{done} / {total}  ({pct}%)')
+        
+        msg = f'> [{bar}] {pct}%  {done}/{total}'
+        lbl_text = f'{done} / {total}  ({pct}%)'
+        
+        self._log(msg)
+        self.root.after(0, lambda: self.progress_label.config(text=lbl_text))
 
     def _start_processing(self):
         folder = self.source_folder.get()
@@ -267,7 +292,6 @@ class PicProcessApp:
         if self.duplicate_info:
             self._log(f'> [DUPLICATE] {self.duplicates_found} duplicate(s) found', 'warn')
 
-        # ── 戰報輸出區塊 (全英文版) ────────────────────────────────────
         self._log('> ────────────────────────────────────', 'dim')
         self._log('> 📊 Processing Summary:', 'blue')
         self._log(f'> Total files      : {self.total}', 'info')
@@ -298,38 +322,54 @@ class PicProcessApp:
         if self.undo_mgr.can_undo():
             self.undo_btn.config(state='normal')
         
-        os.system(f'open "{self.source_folder.get()}"')
+        # 【優化】呼叫跨平台開啟資料夾函式
+        self._open_folder_cross_platform(self.source_folder.get())
         
         if self.duplicate_info:
             self._show_duplicate_dialog()
 
+    # ── 【優化】滾動條重複檔案視窗 ──
     def _show_duplicate_dialog(self):
         win = tk.Toplevel(self.root)
         win.title('發現重複檔案')
-        win.geometry('540x420')
+        win.geometry('540x480') # 稍微加高一點
         win.configure(bg=BG_APP)
 
         tk.Label(win, text='發現重複檔案', font=(FONT_SYS, 18, 'bold'),
-                 bg=BG_APP, fg=FG_MAIN).pack(pady=(30, 4))
+                 bg=BG_APP, fg=FG_MAIN).pack(pady=(20, 4))
         tk.Label(win, text='以下檔案內容完全相同，勾選要移至回收桶的項目：',
-                 font=(FONT_SYS, 12), bg=BG_APP, fg=FG_SUB).pack(pady=(0, 16))
+                 font=(FONT_SYS, 12), bg=BG_APP, fg=FG_SUB).pack(pady=(0, 10))
 
-        frame = tk.Frame(win, bg=BG_APP)
-        frame.pack(fill='both', expand=True, padx=30)
+        # 建立 Canvas 與 Scrollbar 組合來實現滾動區域
+        canvas = tk.Canvas(win, bg=BG_APP, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg=BG_APP)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # 打包畫布與滾動條
+        canvas.pack(side="top", fill="both", expand=True, padx=(30, 0), pady=10)
+        scrollbar.pack(side="right", fill="y", before=canvas)
 
         check_vars = {}
         for h, paths in self.duplicate_info.items():
-            tk.Label(frame, text=f'重複群組（{len(paths)} 個相同檔案）：',
+            # 將物件放置於 scrollable_frame 而非直接放 win
+            tk.Label(scrollable_frame, text=f'重複群組（{len(paths)} 個相同檔案）：',
                      font=(FONT_SYS, 11, 'bold'), bg=BG_APP, fg=FG_MAIN).pack(anchor='w', pady=(12, 4))
             
             for i, p in enumerate(paths):
                 if i == 0:
-                    tk.Label(frame, text=f'  ✅ 保留：{os.path.basename(p)}',
+                    tk.Label(scrollable_frame, text=f'  ✅ 保留：{os.path.basename(p)}',
                              font=('Courier', 11), bg=BG_APP, fg='#28CD41').pack(anchor='w')
                 else:
                     var = tk.BooleanVar(value=True)
                     check_vars[p] = var
-                    tk.Checkbutton(frame, text=f'  🗑  刪除：{os.path.basename(p)}',
+                    tk.Checkbutton(scrollable_frame, text=f'  🗑  刪除：{os.path.basename(p)}',
                                    variable=var, font=('Courier', 11),
                                    bg=BG_APP, fg=FG_MAIN).pack(anchor='w')
 
@@ -342,7 +382,7 @@ class PicProcessApp:
             win.destroy()
 
         ttk.Button(win, text='確認刪除選取項目', style='Accent.TButton',
-                   command=confirm).pack(pady=24)
+                   command=confirm).pack(pady=20)
 
     def _undo(self):
         if not self.undo_mgr.can_undo():
