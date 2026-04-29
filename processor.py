@@ -1,12 +1,12 @@
 # processor.py
-# PicProcess ver 1.0
-# 功能：讀取 EXIF 日期、自動轉正、移動檔案到對應資料夾
+# PicProcess ver 1.1
+# 功能：讀取 EXIF 日期、自動轉正、移動檔案到對應資料夾 (已加入精準例外處理)
 
 import os
 import re
 import shutil
 from datetime import datetime
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
 from PIL.ExifTags import TAGS
 from file_utils import get_file_type
 
@@ -19,8 +19,16 @@ def get_exif_date(file_path):
             for tag_id, value in exif_data.items():
                 tag = TAGS.get(tag_id, tag_id)
                 if tag == 'DateTimeOriginal':
-                    return datetime.strptime(value, '%Y:%m:%d %H:%M:%S')
-    except Exception:
+                    try:
+                        return datetime.strptime(str(value), '%Y:%m:%d %H:%M:%S')
+                    except ValueError:
+                        return None
+    except (IOError, UnidentifiedImageError):
+        # 預期內的錯誤：檔案讀取失敗或非圖片格式，安靜跳過
+        return None
+    except Exception as e:
+        # 預期外的錯誤：印出警告，不讓錯誤石沉大海
+        print(f"⚠️ [Error] 讀取 {os.path.basename(file_path)} EXIF 失敗: {e}")
         return None
     return None
 
@@ -82,37 +90,50 @@ def safe_move(src_path, dest_folder, action_table, auto_rotate=False):
             counter += 1
 
     try:
-        is_rotated = False
-        if auto_rotate and os.path.splitext(src_path)[1].lower() in {'.jpg', '.jpeg', '.png'}:
-            try:
-                with Image.open(src_path) as img:
-                    exif = img.getexif()
-                    orientation = exif.get(274)
-                    
-                    if orientation and orientation != 1:
-                        img_rotated = ImageOps.exif_transpose(img)
-                        del exif[274]
-                        img_rotated.save(dest_path, exif=exif)
-                        is_rotated = True
-            except Exception:
-                pass 
-
-        if not is_rotated:
-            # 【優化點】使用 shutil.move 自動判斷最佳搬移方式，瞬間完成
-            shutil.move(src_path, dest_path)
-
+        # 先完成搬移，再於目的檔用暫存檔轉正，避免原檔與新檔狀態不一致
+        shutil.move(src_path, dest_path)
+        rotate_ok = True
+        rotate_msg = ''
+        if auto_rotate:
+            rotate_ok, rotate_msg = _auto_rotate_in_place(dest_path)
+ 
         if os.path.exists(dest_path):
-            if is_rotated and os.path.exists(src_path):
-                # 只有被轉正且另存新檔的情況，才需要手動刪除原檔
-                os.remove(src_path)
-                
             action_table.append({
                 'original': src_path,
                 'moved_to': dest_path
             })
+            if not rotate_ok:
+                return True, dest_path, rotate_msg
             return True, dest_path, 'success'
         else:
             return False, None, 'move/save failed'
             
     except Exception as e:
         return False, None, str(e)
+
+
+def _auto_rotate_in_place(file_path):
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext not in {'.jpg', '.jpeg', '.png'}:
+        return True, 'unsupported auto-rotate format'
+
+    base, ext = os.path.splitext(file_path)
+    temp_path = f"{base}.picprocess_tmp{ext}"
+    try:
+        with Image.open(file_path) as img:
+            exif = img.getexif()
+            orientation = exif.get(274)
+
+            if not orientation or orientation == 1:
+                return True, 'no rotation needed'
+
+            img_rotated = ImageOps.exif_transpose(img)
+            if 274 in exif:
+                del exif[274]
+            img_rotated.save(temp_path, exif=exif)
+        os.replace(temp_path, file_path)
+        return True, 'rotated'
+    except Exception:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return False, 'moved, but auto-rotate failed'

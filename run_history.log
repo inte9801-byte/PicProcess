@@ -1,0 +1,40 @@
+
+[2026-04-28 14:42] Run completed
+- Source     : /Users/chenshaowei/Pictures/Test
+- Total      : 10
+- Success    : 8 | Skipped: 1 | Failed: 0
+- Conflicts renamed : 0
+- Duplicates found  : 1
+- Auto-rotate: Disabled
+
+[2026-04-28 16:11] Run completed
+- Source     : /Users/chenshaowei/Pictures/pic
+- Total      : 1
+- Success    : 0 | Skipped: 1 | Failed: 0
+- Conflicts renamed : 0
+- Duplicates found  : 0
+- Auto-rotate: Disabled
+
+[2026-04-28 16:14] Run completed
+- Source     : /Users/chenshaowei/Pictures/pic
+- Total      : 1
+- Success    : 0 | Skipped: 1 | Failed: 0
+- Conflicts renamed : 0
+- Duplicates found  : 0
+- Auto-rotate: Disabled
+
+[2026-04-28 16:17] Run completed
+- Source     : /Users/chenshaowei/Pictures/pic
+- Total      : 1
+- Success    : 0 | Skipped: 1 | Failed: 0
+- Conflicts renamed : 0
+- Duplicates found  : 0
+- Auto-rotate: Disabled
+
+[2026-04-29 21:26] Run completed
+- Source     : /Users/chenshaowei/Pictures/test
+- Total      : 19
+- Success    : 19 | Skipped: 0 | Failed: 0
+- Conflicts renamed : 0
+- Duplicates found  : 0
+- Auto-rotate: Enabled

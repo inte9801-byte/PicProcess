@@ -1,5 +1,5 @@
 # logger.py
-# PicProcess ver 1.0
+# PicProcess ver 1.1
 # 功能：版本紀錄與執行歷史日誌管理
 
 import os
@@ -22,7 +22,7 @@ LOG_DIR          = _get_log_dir()
 CHANGELOG_PATH   = os.path.join(LOG_DIR, 'changelog.log')
 RUN_HISTORY_PATH = os.path.join(LOG_DIR, 'run_history.log')
 
-VERSION = 'ver 1.0'
+VERSION = 'ver 1.1'
 
 
 def write_changelog(version, notes):

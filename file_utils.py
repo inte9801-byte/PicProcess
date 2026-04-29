@@ -1,5 +1,5 @@
 # file_utils.py
-# PicProcess ver 1.0
+# PicProcess ver 1.1
 # 功能：掃描資料夾、判斷檔案類型（含完整截圖辨識）、偵測重複檔案
 
 import os
@@ -11,19 +11,22 @@ from PIL.ExifTags import TAGS
 VIDEO_EXT  = {'.mp4', '.mov', '.avi', '.mkv', '.m4v'}
 IMAGE_EXT  = {'.jpg', '.jpeg', '.png', '.heic', '.bmp', '.gif', '.tiff'}
 
-SCREENSHOT_PREFIXES = (
-    'screenshot', '截圖', 'img_', 'screen shot'
+SCREENSHOT_NAME_MARKERS = (
+    'screenshot', 'screen shot', '截圖'
 )
 
 # 常見手機螢幕比例 (長/寬 或 寬/長)
 # 16:9, 19.5:9, 19:9, 20:9, 21:9
 TARGET_RATIOS = [16/9, 19.5/9, 19/9, 20/9, 21/9]
+IGNORED_FILENAME_PREFIXES = ('.DS_Store',)
 
 # ── 1. 掃描資料夾 ────────────────────────────────
 def scan_folder(folder_path):
     """掃描資料夾，回傳所有檔案路徑的清單"""
     all_files = []
     for filename in os.listdir(folder_path):
+        if filename.startswith(IGNORED_FILENAME_PREFIXES):
+            continue
         full_path = os.path.join(folder_path, filename)
         if os.path.isfile(full_path):
             all_files.append(full_path)
@@ -59,6 +62,31 @@ def _is_screen_ratio(width, height):
             return True
     return False
 
+def _has_screenshot_description(img):
+    """檢查 EXIF 描述是否明確標示為截圖"""
+    try:
+        exif_data = img._getexif()
+        if not exif_data:
+            return False
+
+        for tag_id, value in exif_data.items():
+            tag = TAGS.get(tag_id, tag_id)
+            if tag == 'ImageDescription' and 'screenshot' in str(value).lower():
+                return True
+    except Exception:
+        return False
+    return False
+
+def _has_sparse_exif(img, max_tags=16):
+    """截圖、下載圖、另存圖通常 EXIF 很少；iPhone 原始照片通常有大量相機資訊"""
+    try:
+        exif_data = img._getexif()
+        if not exif_data:
+            return True
+        return len(exif_data) <= max_tags
+    except Exception:
+        return True
+
 # ── 2. 判斷檔案類型 ──────────────────────────────
 def get_file_type(file_path):
     """
@@ -75,28 +103,33 @@ def get_file_type(file_path):
         return 'video'
         
     if ext in IMAGE_EXT:
-        score = 0
-        
-        # 條件 1：檔名特徵
-        if any(filename.startswith(p) for p in SCREENSHOT_PREFIXES):
-            score += 1
+        has_screenshot_name = any(marker in filename for marker in SCREENSHOT_NAME_MARKERS)
+        missing_camera_info = False
+        matches_screen_ratio = False
+        has_screenshot_description = False
+        has_sparse_exif = False
             
-        # 需要讀取圖片才能判斷條件 2 與 3
+        # 需要讀取圖片才能判斷 EXIF 與尺寸比例
         try:
             with Image.open(file_path) as img:
-                # 條件 2：格式為 .png 且缺乏相機設備資訊
-                if ext == '.png' and _is_missing_camera_info(img):
-                    score += 1
-                    
-                # 條件 3：螢幕比例符合手機特徵
+                missing_camera_info = _is_missing_camera_info(img)
+                has_screenshot_description = _has_screenshot_description(img)
+                has_sparse_exif = _has_sparse_exif(img)
                 width, height = img.size
-                if _is_screen_ratio(width, height):
-                    score += 1
+                matches_screen_ratio = _is_screen_ratio(width, height)
         except Exception:
-            pass # 若圖片無法讀取，則跳過條件 2 和 3 的加分
+            pass # 若圖片無法讀取，則跳過 EXIF 與尺寸判斷
             
-        # 符合兩項以上，判定為截圖
-        if score >= 2:
+        # 明確截圖檔名優先判定，避免真正截圖只因格式或比例不同而漏判
+        if has_screenshot_name or has_screenshot_description:
+            return 'screenshot'
+
+        # 無明確檔名時採保守判斷：PNG、缺少相機資訊，且比例像手機螢幕才視為截圖
+        if ext == '.png' and missing_camera_info and matches_screen_ratio:
+            return 'screenshot'
+
+        # iPhone 截圖經裁切、下載或另存後，比例可能不固定；缺少相機資訊且 EXIF 很少時歸入截圖
+        if ext in {'.jpg', '.jpeg', '.png'} and missing_camera_info and has_sparse_exif:
             return 'screenshot'
             
         return 'image'

@@ -1,9 +1,26 @@
 # undo_manager.py
-# PicProcess ver 1.0
+# PicProcess ver 1.1
 # 功能：記錄操作動作、執行還原
 
 import os
 import shutil
+
+
+def _get_available_path(path):
+    """Return a non-existing path by appending a numeric suffix when needed."""
+    if not os.path.exists(path):
+        return path
+
+    folder = os.path.dirname(path)
+    filename = os.path.basename(path)
+    name, ext = os.path.splitext(filename)
+    counter = 1
+
+    while True:
+        candidate = os.path.join(folder, f"{name}_restored_{counter}{ext}")
+        if not os.path.exists(candidate):
+            return candidate
+        counter += 1
 
 
 class UndoManager:
@@ -51,14 +68,14 @@ class UndoManager:
                 original_dir = os.path.dirname(original)
                 os.makedirs(original_dir, exist_ok=True)
 
-                # 安全移回原位
-                shutil.copy2(moved_to, original)
-                if os.path.exists(original):
-                    os.remove(moved_to)
+                # 安全移回原位；若原位置已有新檔案，避免覆蓋並改名還原
+                restore_to = _get_available_path(original)
+                shutil.move(moved_to, restore_to)
+                if os.path.exists(restore_to):
                     success += 1
                 else:
                     failed += 1
-                    failed_list.append(f"還原失敗：{original}")
+                    failed_list.append(f"還原失敗：{restore_to}")
 
             except Exception as e:
                 failed += 1
