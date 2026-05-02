@@ -1,21 +1,15 @@
 # ui.py
-# PicProcess ver 1.1 (Stable Hybrid Core)
-# Layout: v1.0 Traditional Chinese UI
-# Terminal: English Output with Single-line Progress Bar
-# Features: Auto-rotate warning & Deep undo (removes HTML/Folders)
-
 import os
 import platform
 import subprocess
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import threading
-import shutil # 用於深度清理資料夾
-from file_utils import scan_folder, get_file_type, find_duplicates
+from file_utils import scan_folder, handle_duplicates
 from processor import get_target_folder, safe_move
 from gps_map import generate_gps_map 
 from undo_manager import UndoManager
-from logger import init_changelog, write_run_history
+from logger import init_changelog
 
 VERSION = 'ver 1.1'
 
@@ -27,7 +21,7 @@ FG_SUB    = '#86868B'
 BORDER    = '#D1D1D6'  
 BLUE      = '#007AFF'  
 BLUE_ACT  = '#0058B8'  
-RED       = '#FF3B30'  
+RED       = '#FF6B6B'  
 RED_ACT   = '#D70015'  
 
 TERM_BG   = '#1E1E1E'
@@ -36,13 +30,14 @@ TERM_WARN = '#FFD60A'
 TERM_ERR  = '#FF453A'  
 TERM_DIM  = '#98989D'  
 TERM_BLUE = '#64D2FF'  
+TERM_DANGER = '#FF6B6B' 
 
 FONT_SYS  = 'Helvetica Neue'
 
 class PicProcessApp:
     def __init__(self, root):
         self.root = root
-        self.root.title(f'PicProcess  {VERSION}')
+        self.root.title(f'PicProcess {VERSION}')
         self.root.geometry('620x510')
         self.root.configure(bg=BG_APP)
         self.root.resizable(True, True)
@@ -55,17 +50,16 @@ class PicProcessApp:
 
         self.success = 0
         self.total = 0
-        self.created_dirs = [] # 追蹤建立的資料夾
-        self.html_map_path = "" # 追蹤產生的地圖檔案
-
+        self.created_dirs = []
+        self.html_map_path = "" 
+        
         init_changelog()
         self._setup_styles()
         self._build_ui()
 
     def _on_rotate_toggle(self):
-        """當選取自動轉正時彈出警語"""
         if self.auto_rotate.get():
-            messagebox.showinfo("提示", "開啟自動轉正會修改原始檔案，處理時間較長。")
+            messagebox.showinfo("提示", "開啟自動轉正將會修改原始檔案的像素排列，處理時間會較長。\n(註：HEIC 格式為避免失真，將維持無損移動不進行轉檔)")
 
     def _setup_styles(self):
         style = ttk.Style()
@@ -100,7 +94,6 @@ class PicProcessApp:
         tk.Radiobutton(mode_frame, text='按月份', variable=self.mode, value='month', font=(FONT_SYS, 10), bg=BG_CARD, fg=FG_MAIN, selectcolor=BG_CARD).pack(side='left')
 
         tk.Label(card, text='自動轉正', font=(FONT_SYS, 11, 'bold'), bg=BG_CARD, fg=FG_MAIN).grid(row=2, column=0, sticky='w', padx=(16, 8), pady=(2, 12))
-        # 加入 command 回呼以彈出警語
         tk.Checkbutton(card, text='啟用 (EXIF 旋轉)', variable=self.auto_rotate, font=(FONT_SYS, 10), bg=BG_CARD, fg=FG_MAIN, selectcolor=BG_CARD, command=self._on_rotate_toggle).grid(row=2, column=1, columnspan=2, sticky='w', pady=(2, 12))
 
         action_wrap = tk.Frame(self.root, bg=BG_APP)
@@ -117,12 +110,9 @@ class PicProcessApp:
 
         term_wrap = tk.Frame(self.root, bg=BG_APP, padx=20)
         term_wrap.pack(fill='both', expand=True, pady=(0, 6))
-        
         term_header = tk.Frame(term_wrap, bg=BG_APP)
         term_header.pack(fill='x', pady=(0, 2))
         tk.Label(term_header, text='Terminal Output', font=('Courier', 10, 'bold'), bg=BG_APP, fg=FG_SUB).pack(side='left')
-        self.progress_label = tk.Label(term_header, text='', font=('Courier', 10, 'bold'), bg=BG_APP, fg=BLUE)
-        self.progress_label.pack(side='right')
 
         self.terminal = tk.Text(term_wrap, bg=TERM_BG, fg=TERM_FG, font=('Courier', 11), relief='flat', state='disabled', wrap='word', highlightbackground=BORDER, highlightthickness=1, padx=10, pady=10)
         self.terminal.pack(fill='both', expand=True)
@@ -132,6 +122,8 @@ class PicProcessApp:
         self.terminal.tag_config('info',  foreground=TERM_FG)
         self.terminal.tag_config('dim',   foreground=TERM_DIM)
         self.terminal.tag_config('blue',  foreground=TERM_BLUE)
+        self.terminal.tag_config('danger_line', foreground=TERM_DANGER)
+        self.terminal.tag_config('danger_bold', foreground=TERM_DANGER, font=('Courier', 11, 'bold'))
 
     def _log(self, msg, tag='info'):
         self.root.after(0, lambda: self._update_terminal(msg, tag))
@@ -142,49 +134,61 @@ class PicProcessApp:
         self.terminal.see('end')
         self.terminal.config(state='disabled')
 
+    def _log_danger_summary(self, count, mb_freed):
+        def update_ui():
+            self.terminal.config(state='normal')
+            self.terminal.insert('end', f"\n> [SUMMARY] ", 'danger_line')
+            self.terminal.insert('end', f"{count}", 'danger_bold')
+            self.terminal.insert('end', f" duplicates moved to Trash. Freed {mb_freed:.1f} MB.\n", 'danger_line')
+            self.terminal.see('end')
+            self.terminal.config(state='disabled')
+        self.root.after(0, update_ui)
+
     def _log_progress(self, done, total):
         pct = int(done / total * 100) if total > 0 else 0
         filled = int(pct / 5)
         bar = '█' * filled + '░' * (20 - filled)
-        msg = f'> [{bar}] {pct}%  Processing: {done}/{total}'
+        msg = f'> [{bar}] {pct}%\n> Items: {done} / {total} (Processed)'
         
         def update_ui():
             self.terminal.config(state='normal')
-            last_line_index = self.terminal.index("end-1c linestart")
-            line_content = self.terminal.get(last_line_index, "end-1c")
+            last_line_index = self.terminal.index("end-2c linestart")
+            prev_line_index = self.terminal.index(f"{last_line_index} - 1 line")
+            
+            line_content = self.terminal.get(prev_line_index, "end-1c")
             if line_content.startswith('> ['):
-                self.terminal.delete(last_line_index, "end-1c")
-                self.terminal.insert('end', msg, 'dim')
+                self.terminal.delete(prev_line_index, "end-1c")
+                self.terminal.insert('end', msg, 'blue')
             else:
-                self.terminal.insert('end', '\n' + msg, 'dim')
+                self.terminal.insert('end', '\n' + msg, 'blue')
+            
             self.terminal.see('end')
             self.terminal.config(state='disabled')
-            self.progress_label.config(text=f'{done}/{total} ({pct}%)')
-
         self.root.after(0, update_ui)
-
-    def _generate_gps_map_thread(self, folder):
-        try:
-            self._log("> Analyzing GPS data & embedding thumbnails...", 'blue')
-            self.html_map_path = os.path.join(folder, f"{os.path.basename(folder)}_Travel_Map.html")
-            report = generate_gps_map(folder, self.html_map_path)
-            self._log(f"> Success! Travel Map saved: {os.path.basename(self.html_map_path)}", 'blue')
-            self._open_folder_cross_platform(self.html_map_path)
-        except Exception as e:
-            self._log(f"> Error: Failed to generate map - {e}", 'error')
-        finally:
-            self.root.after(0, lambda: self.map_btn.config(state='normal'))
 
     def _start_gps_map(self):
         folder = self.source_folder.get()
         if not folder: return
         self.map_btn.config(state='disabled')
-        threading.Thread(target=self._generate_gps_map_thread, args=(folder,), daemon=True).start()
+        def generate():
+            try:
+                self._log("> Analyzing GPS data & embedding thumbnails...", 'blue')
+                out = os.path.join(folder, f"{os.path.basename(folder)}_Travel_Map.html")
+                self.html_map_path = out 
+                generate_gps_map(folder, out)
+                self._log(f"> Success! Travel Map saved: {os.path.basename(out)}", 'blue')
+                self._open_folder_cross_platform(out)
+            except Exception as e:
+                self._log(f"> Error: Failed to generate map - {e}", 'error')
+            finally:
+                self.root.after(0, lambda: self.map_btn.config(state='normal'))
+        threading.Thread(target=generate, daemon=True).start()
 
     def _start_processing(self):
         folder = self.source_folder.get()
         if not folder: return
         self.start_btn.config(state='disabled')
+        self.undo_btn.config(state='disabled')
         self.terminal.config(state='normal')
         self.terminal.delete('1.0', 'end')
         self.terminal.config(state='disabled')
@@ -194,23 +198,45 @@ class PicProcessApp:
 
     def _process_files(self, folder):
         self._log(f'> Initializing disk scan...', 'dim')
-        files = scan_folder(folder)
-        self.total = len(files)
+        raw_files = scan_folder(folder)
         
-        if self.total == 0:
-            self._log("> No compatible files found.", 'warn')
+        if len(raw_files) == 0:
+            self._log("> No files found in root directory.", 'warn')
             self.root.after(0, lambda: self.start_btn.config(state='normal'))
             return
 
-        for i, fpath in enumerate(files):
+        self._log(f'> Analyzing {len(raw_files)} files for duplicates...', 'dim')
+        clean_files, dup_report = handle_duplicates(raw_files)
+        
+        total_freed_bytes = 0
+        total_removed_count = 0
+        
+        if dup_report:
+            self._log(f"> [DUPLICATE] Found {len(dup_report)} duplicate group(s)", 'warn')
+            for group in dup_report:
+                for rm_item in group['removed']:
+                    total_freed_bytes += rm_item['size']
+                    total_removed_count += 1
+                    self._log(f"  [REMOVED] {os.path.basename(rm_item['path'])} -> Trash", 'dim')
+                self._log(f"  [KEPT]    {os.path.basename(group['kept'])}", 'dim')
+
+        self.total = len(clean_files)
+        self._log(f'\n> Starting organization for {self.total} unique items...', 'dim')
+        
+        skipped_count = 0
+        for i, fpath in enumerate(clean_files):
             if i % max(1, self.total // 10) == 0 or i == self.total - 1:
                 self._log_progress(i + 1, self.total)
 
             target = get_target_folder(fpath, self.mode.get())
-            if not target: continue
+            if not target: 
+                self._log(f"> [SKIPPED] {os.path.basename(fpath)} (Unknown format)", 'warn')
+                skipped_count += 1
+                continue
             
             dest_folder = os.path.join(folder, target)
             if not os.path.exists(dest_folder):
+                os.makedirs(dest_folder)
                 self.created_dirs.append(dest_folder)
 
             ok, dest, _ = safe_move(fpath, dest_folder, [], self.auto_rotate.get())
@@ -218,15 +244,16 @@ class PicProcessApp:
                 self.undo_mgr.record(fpath, dest)
                 self.success += 1
 
-        self._log(f'> Running fast duplicate comparison...', 'dim')
-        self.duplicate_info = find_duplicates(scan_folder(folder))
-        self._log(f'> Task Complete! Processed {self.success} items.', 'blue')
+        if total_removed_count > 0:
+            freed_mb = total_freed_bytes / (1024 * 1024)
+            self._log_danger_summary(total_removed_count, freed_mb)
+
+        self._log(f'> Task Complete! Processed {self.success} items, Skipped {skipped_count}.', 'blue')
         self.root.after(0, self._on_complete)
 
     def _on_complete(self):
         self.start_btn.config(state='normal')
         if self.undo_mgr.can_undo(): self.undo_btn.config(state='normal')
-        self._start_gps_map()
         self._open_folder_cross_platform(self.source_folder.get())
 
     def _pick_folder(self):
@@ -238,19 +265,17 @@ class PicProcessApp:
         elif platform.system() == "Windows": os.startfile(path)
 
     def _undo(self):
-        if not messagebox.askyesno('Undo', '確定要還原所有操作並刪除產生的地圖足跡？'): return
+        if not messagebox.askyesno('Undo', '確定要還原所有操作並刪除產生的空資料夾與地圖嗎？\n(註：已移至垃圾桶的重複照片需手動還原)'): return
         
-        # 1. 還原照片位置
         s, f, _ = self.undo_mgr.undo_all()
         
-        # 2. 刪除 HTML 地圖
         if self.html_map_path and os.path.exists(self.html_map_path):
             try:
                 os.remove(self.html_map_path)
                 self._log(f"> Cleaned map file: {os.path.basename(self.html_map_path)}", 'warn')
+                self.html_map_path = "" 
             except: pass
-
-        # 3. 刪除空資料夾 (由後往前刪除，確保子目錄先刪除)
+        
         for d in reversed(self.created_dirs):
             if os.path.exists(d) and not os.listdir(d):
                 try:
